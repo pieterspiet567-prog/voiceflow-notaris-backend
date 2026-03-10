@@ -1,0 +1,68 @@
+Last login: Sun Mar  8 16:27:15 on ttys000
+henridejonghe@MacBook-Air-4 node % ls
+henridejonghe@MacBook-Air-4 node % npm init -y
+Wrote to /Users/henridejonghe/Downloads/node/package.json:
+
+{
+  "name": "node",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs"
+}
+
+
+henridejonghe@MacBook-Air-4 node % npm install express playwright
+
+added 67 packages, and audited 68 packages in 3s
+
+22 packages are looking for funding
+  run `npm fund` for details
+
+found 0 vulnerabilities
+henridejonghe@MacBook-Air-4 node % cd ~/Desktop/notary-backend
+cd: no such file or directory: /Users/henridejonghe/Desktop/notary-backend
+henridejonghe@MacBook-Air-4 node % cd ~/Desktop/node          
+cd: no such file or directory: /Users/henridejonghe/Desktop/node
+henridejonghe@MacBook-Air-4 node % cd ~/Downloads/node           
+henridejonghe@MacBook-Air-4 node % ls
+node_modules		package-lock.json	package.json
+henridejonghe@MacBook-Air-4 node % npm init -y
+Wrote to /Users/henridejonghe/Downloads/node/package.json:
+
+{
+  "name": "node",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "express": "^5.2.1",
+    "playwright": "^1.58.2"
+  },
+  "devDependencies": {}
+}
+
+
+henridejonghe@MacBook-Air-4 node % ls
+node_modules		package-lock.json	package.json
+henridejonghe@MacBook-Air-4 node % touch server.js
+henridejonghe@MacBook-Air-4 node % ls
+node_modules		package.json
+package-lock.json	server.js
+henridejonghe@MacBook-Air-4 node % open -a TextEdit server.js
+henridejonghe@MacBook-Air-4 node % node server.js
+Server draait op http://localhost:3000
+

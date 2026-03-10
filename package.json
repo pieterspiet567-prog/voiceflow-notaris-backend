@@ -1,0 +1,13 @@
+{
+  "name": "voiceflow-notaris-backend",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "postinstall": "playwright install chromium"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "playwright": "^1.52.0"
+  }
+}
