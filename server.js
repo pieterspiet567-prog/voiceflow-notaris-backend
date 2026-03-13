@@ -8,12 +8,7 @@ const CALCULATOR_URL =
   'https://www.notaris.be/rekenmodules/wonen/aankoopkosten-van-een-woning-en/bouwgrond-berekenen';
 
 function normalizeSpaces(text = '') {
-  return text.replace(/\s+/g, ' ').trim();
-}
-
-function cleanValue(value) {
-  if (value === '' || value === 'null' || value === 'undefined') return null;
-  return value;
+  return String(text).replace(/\s+/g, ' ').trim();
 }
 
 function parseBoolean(value) {
@@ -21,12 +16,25 @@ function parseBoolean(value) {
 
   if (typeof value === 'string') {
     const v = value.trim().toLowerCase();
-
     if (['true', 'ja', 'yes', '1'].includes(v)) return true;
     if (['false', 'nee', 'no', '0'].includes(v)) return false;
   }
 
   return null;
+}
+
+function normalizePrice(value) {
+  if (value === null || value === undefined || value === '') return null;
+
+  const cleaned = String(value)
+    .replace(/[^\d,.-]/g, '')
+    .replace(/\./g, '')
+    .replace(',', '.');
+
+  const num = Number(cleaned);
+  if (!Number.isFinite(num) || num <= 0) return null;
+
+  return String(Math.round(num));
 }
 
 function mapRegion(region) {
@@ -42,22 +50,21 @@ function mapRegion(region) {
 function mapPropertyType(propertyType) {
   if (!propertyType) return null;
 
-  const p = String(propertyType)
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .trim();
+  const p = String(propertyType).toLowerCase().replace(/\s+/g, ' ').trim();
 
   if (
-    p === 'woning / appartement' ||
-    p === 'woning/appartement' ||
-    p === 'woning appartement' ||
-    p === 'woning' ||
-    p === 'appartement'
+    [
+      'woning / appartement',
+      'woning/appartement',
+      'woning appartement',
+      'woning',
+      'appartement'
+    ].includes(p)
   ) {
     return 'Woning / appartement';
   }
 
-  if (p === 'bouwgrond' || p === 'grond') {
+  if (['bouwgrond', 'grond'].includes(p)) {
     return 'Bouwgrond';
   }
 
@@ -99,13 +106,16 @@ function mapPurchaseMode(purchaseMode) {
 }
 
 function extractMoney(text, label) {
+  const source = normalizeSpaces(text);
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const regex = new RegExp(`${escaped}\\s*€\\s*([\\d.]+,\\d{2})`, 'i');
-  const match = text.match(regex);
+  const match = source.match(regex);
   return match ? `€ ${match[1]}` : null;
 }
 
 function extractTotal(text) {
+  const source = normalizeSpaces(text);
+
   const patterns = [
     /Het totaal van de kosten.*?geraamd op\s*€\s*([\d.]+,\d{2})/i,
     /totaal van de kosten.*?€\s*([\d.]+,\d{2})/i,
@@ -113,7 +123,7 @@ function extractTotal(text) {
   ];
 
   for (const regex of patterns) {
-    const match = text.match(regex);
+    const match = source.match(regex);
     if (match) return `€ ${match[1]}`;
   }
 
@@ -124,13 +134,15 @@ async function acceptCookies(page) {
   const candidates = [
     page.getByRole('button', { name: /alle cookies toestaan/i }).first(),
     page.getByRole('button', { name: /accepteren/i }).first(),
+    page.getByRole('button', { name: /accept/i }).first(),
     page.getByText(/alle cookies toestaan/i).first()
   ];
 
   for (const candidate of candidates) {
     try {
-      if (await candidate.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await candidate.click({ force: true, timeout: 3000 }).catch(() => {});
+      const visible = await candidate.isVisible({ timeout: 2000 }).catch(() => false);
+      if (visible) {
+        await candidate.click({ force: true, timeout: 5000 }).catch(() => {});
         await page.waitForTimeout(1500);
         return true;
       }
@@ -141,13 +153,13 @@ async function acceptCookies(page) {
 }
 
 async function getCalculatorFrame(page) {
-  await page.waitForTimeout(2500);
-
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < 15; i++) {
     const frames = page.frames();
     const frame = frames.find((f) => f.url().includes('calculator.notaris.be'));
 
-    if (frame) return frame;
+    if (frame) {
+      return frame;
+    }
 
     await page.evaluate(() => {
       window.scrollTo(0, document.body.scrollHeight / 2);
@@ -160,15 +172,27 @@ async function getCalculatorFrame(page) {
 }
 
 async function clickRadioByText(frame, textCandidates) {
-  for (const text of textCandidates) {
-    const locator = frame.locator(`text=${text}`).first();
-    try {
-      if (await locator.isVisible({ timeout: 1000 }).catch(() => false)) {
-        await locator.click({ force: true });
-        await frame.waitForTimeout(400);
-        return true;
-      }
-    } catch (_) {}
+  for (const rawText of textCandidates) {
+    if (!rawText) continue;
+
+    const text = String(rawText).trim();
+
+    const candidates = [
+      frame.getByText(new RegExp(`^${text}$`, 'i')).first(),
+      frame.getByText(text, { exact: true }).first(),
+      frame.locator(`text=${text}`).first()
+    ];
+
+    for (const locator of candidates) {
+      try {
+        const visible = await locator.isVisible({ timeout: 1500 }).catch(() => false);
+        if (visible) {
+          await locator.click({ force: true, timeout: 5000 });
+          await frame.waitForTimeout(500);
+          return true;
+        }
+      } catch (_) {}
+    }
   }
 
   return false;
@@ -180,12 +204,34 @@ async function fillInputNearLabel(frame, labelCandidates, value) {
   const stringValue = String(value);
 
   for (const label of labelCandidates) {
-    const input = frame.locator(`xpath=//*[contains(text(),"${label}")]/following::input[1]`).first();
+    const xpath = `xpath=//*[contains(normalize-space(text()),"${label}")]/following::input[1]`;
+    const locator = frame.locator(xpath).first();
 
     try {
-      if (await input.isVisible({ timeout: 1000 }).catch(() => false)) {
+      const visible = await locator.isVisible({ timeout: 1500 }).catch(() => false);
+      if (visible) {
+        await locator.fill('');
+        await locator.type(stringValue, { delay: 50 });
+        await frame.waitForTimeout(300);
+        return true;
+      }
+    } catch (_) {}
+  }
+
+  const fallbackInputs = frame.locator('input');
+  const count = await fallbackInputs.count().catch(() => 0);
+
+  for (let i = 0; i < count; i++) {
+    const input = fallbackInputs.nth(i);
+
+    try {
+      const visible = await input.isVisible({ timeout: 500 }).catch(() => false);
+      const enabled = await input.isEnabled({ timeout: 500 }).catch(() => false);
+
+      if (visible && enabled) {
         await input.fill('');
-        await input.type(stringValue);
+        await input.type(stringValue, { delay: 50 });
+        await frame.waitForTimeout(300);
         return true;
       }
     } catch (_) {}
@@ -195,14 +241,21 @@ async function fillInputNearLabel(frame, labelCandidates, value) {
 }
 
 async function clickCalculate(frame) {
-  const locator = frame.locator('text=Bereken').first();
+  const candidates = [
+    frame.getByText(/^Bereken$/i).first(),
+    frame.getByRole('button', { name: /bereken/i }).first(),
+    frame.locator('text=Bereken').first()
+  ];
 
-  try {
-    if (await locator.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await locator.click({ force: true });
-      return true;
-    }
-  } catch (_) {}
+  for (const locator of candidates) {
+    try {
+      const visible = await locator.isVisible({ timeout: 2000 }).catch(() => false);
+      if (visible) {
+        await locator.click({ force: true, timeout: 5000 });
+        return true;
+      }
+    } catch (_) {}
+  }
 
   return false;
 }
@@ -216,9 +269,8 @@ app.get('/health', (req, res) => {
 });
 
 app.post('/calculate', async (req, res) => {
-
-  console.log("🔥 API CALLED");
-  console.log("BODY:", req.body);
+  console.log('🔥 API CALLED');
+  console.log('BODY:', JSON.stringify(req.body, null, 2));
 
   const {
     region,
@@ -234,58 +286,165 @@ app.post('/calculate', async (req, res) => {
   const mappedPurchaseMode = mapPurchaseMode(purchaseMode);
   const parsedOwnAndOnlyHome = parseBoolean(ownAndOnlyHome);
   const parsedKernstad = parseBoolean(kernstad);
+  const normalizedPrice = normalizePrice(price);
+
+  if (!mappedRegion) {
+    return res.status(400).json({
+      success: false,
+      error: 'Ongeldige region'
+    });
+  }
+
+  if (!mappedPropertyType) {
+    return res.status(400).json({
+      success: false,
+      error: 'Ongeldig propertyType'
+    });
+  }
+
+  if (parsedOwnAndOnlyHome === null) {
+    return res.status(400).json({
+      success: false,
+      error: 'Ongeldige ownAndOnlyHome'
+    });
+  }
+
+  if (!mappedPurchaseMode) {
+    return res.status(400).json({
+      success: false,
+      error: 'Ongeldige purchaseMode'
+    });
+  }
+
+  if (!normalizedPrice) {
+    return res.status(400).json({
+      success: false,
+      error: 'Ongeldige prijs'
+    });
+  }
+
+  if (
+    mappedPurchaseMode === 'Aankoop met registratierechten' &&
+    parsedKernstad === null
+  ) {
+    return res.status(400).json({
+      success: false,
+      error: 'Ongeldige kernstad'
+    });
+  }
 
   let browser;
 
   try {
-
+    console.log('1. Launch browser');
     browser = await chromium.launch({
       headless: true,
-      args: ['--no-sandbox']
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
     });
 
+    console.log('2. New page');
     const page = await browser.newPage();
 
+    page.setDefaultTimeout(15000);
+    page.setDefaultNavigationTimeout(30000);
+
+    console.log('3. Goto calculator');
     await page.goto(CALCULATOR_URL, {
       waitUntil: 'domcontentloaded'
     });
 
+    console.log('4. Accept cookies');
     await page.waitForTimeout(3000);
     await acceptCookies(page);
 
+    console.log('5. Find calculator frame');
     const frame = await getCalculatorFrame(page);
 
     if (!frame) {
-      return res.status(500).json({
-        success: false,
-        error: "Calculator iframe niet gevonden"
-      });
+      throw new Error('Calculator iframe niet gevonden');
     }
 
-    await clickRadioByText(frame, [mappedRegion]);
-    await clickRadioByText(frame, [mappedPropertyType]);
-    await clickRadioByText(frame, [parsedOwnAndOnlyHome ? 'Ja' : 'Nee']);
+    console.log('6. Select region:', mappedRegion);
+    const regionClicked = await clickRadioByText(frame, [mappedRegion]);
+    console.log('regionClicked =', regionClicked);
+    if (!regionClicked) {
+      throw new Error(`Kon regio niet selecteren: ${mappedRegion}`);
+    }
 
-    await fillInputNearLabel(frame, ['Aankoopbedrag'], price);
+    console.log('7. Select property type:', mappedPropertyType);
+    const propertyClicked = await clickRadioByText(frame, [mappedPropertyType]);
+    console.log('propertyClicked =', propertyClicked);
+    if (!propertyClicked) {
+      throw new Error(`Kon propertyType niet selecteren: ${mappedPropertyType}`);
+    }
 
-    await clickRadioByText(frame, [mappedPurchaseMode]);
+    console.log('8. Select own and only home:', parsedOwnAndOnlyHome);
+    const ownHomeClicked = await clickRadioByText(
+      frame,
+      [parsedOwnAndOnlyHome ? 'Ja' : 'Nee']
+    );
+    console.log('ownHomeClicked =', ownHomeClicked);
+    if (!ownHomeClicked) {
+      throw new Error('Kon ownAndOnlyHome niet selecteren');
+    }
+
+    console.log('9. Fill price:', normalizedPrice);
+    const priceFilled = await fillInputNearLabel(frame, ['Aankoopbedrag'], normalizedPrice);
+    console.log('priceFilled =', priceFilled);
+    if (!priceFilled) {
+      throw new Error('Kon aankoopbedrag niet invullen');
+    }
+
+    console.log('10. Select purchase mode:', mappedPurchaseMode);
+    const purchaseModeClicked = await clickRadioByText(frame, [mappedPurchaseMode]);
+    console.log('purchaseModeClicked =', purchaseModeClicked);
+    if (!purchaseModeClicked) {
+      throw new Error(`Kon purchaseMode niet selecteren: ${mappedPurchaseMode}`);
+    }
 
     if (mappedPurchaseMode === 'Aankoop met registratierechten') {
-      await clickRadioByText(frame, [parsedKernstad ? 'Ja' : 'Nee']);
+      console.log('11. Select kernstad:', parsedKernstad);
+      const kernstadClicked = await clickRadioByText(
+        frame,
+        [parsedKernstad ? 'Ja' : 'Nee']
+      );
+      console.log('kernstadClicked =', kernstadClicked);
+      if (!kernstadClicked) {
+        throw new Error('Kon kernstad niet selecteren');
+      }
     }
 
-    await clickCalculate(frame);
+    console.log('12. Click calculate');
+    const calculateClicked = await clickCalculate(frame);
+    console.log('calculateClicked =', calculateClicked);
+    if (!calculateClicked) {
+      throw new Error('Bereken-knop niet gevonden');
+    }
 
+    console.log('13. Wait for result');
     await page.waitForTimeout(5000);
 
+    console.log('14. Read result text');
     const frameText = await frame.locator('body').textContent();
+    console.log('Result text length:', frameText?.length || 0);
 
-    const totalCost = extractTotal(frameText);
-    const registrationTax = extractMoney(frameText,'Registratiebelasting/registratierechten');
-    const notaryFee = extractMoney(frameText,'Ereloon');
-    const vat = extractMoney(frameText,'BTW');
+    const resultText = frameText || '';
+    const totalCost = extractTotal(resultText);
+    const registrationTax = extractMoney(
+      resultText,
+      'Registratiebelasting/registratierechten'
+    );
+    const notaryFee = extractMoney(resultText, 'Ereloon');
+    const vat = extractMoney(resultText, 'BTW');
 
-    res.json({
+    console.log('15. Parsed result', {
+      totalCost,
+      registrationTax,
+      notaryFee,
+      vat
+    });
+
+    return res.json({
       success: true,
       results: {
         totalCost,
@@ -294,24 +453,23 @@ app.post('/calculate', async (req, res) => {
         vat
       }
     });
-
   } catch (error) {
+    console.error('ERROR:', error);
 
-    console.error("ERROR:", error);
-
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message,
+      stack: error.stack
     });
-
   } finally {
-    if (browser) await browser.close();
+    if (browser) {
+      await browser.close().catch(() => {});
+    }
   }
-
 });
 
 const PORT = process.env.PORT || 3000;
-const HOST = "0.0.0.0";
+const HOST = '0.0.0.0';
 
 app.listen(PORT, HOST, () => {
   console.log(`Server draait op ${HOST}:${PORT}`);
