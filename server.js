@@ -449,58 +449,70 @@ async function clickCalculate(frame) {
 async function selectRegion(frame, regionText) {
   console.log('Trying to select region:', regionText);
 
-  const selectCount = await frame.locator('select').count().catch(() => 0);
-  console.log('Aantal select elementen:', selectCount);
+  const triggers = [
+    frame.locator('label:has-text("Bereken voor")').locator('xpath=following::*[@role="combobox" or self::div or self::button][1]').first(),
+    frame.getByRole('combobox').first(),
+    frame.locator('text=Bereken voor').first(),
+    frame.locator('label:has-text("Bereken voor")').first()
+  ];
 
-  if (selectCount > 0) {
-    const selectLocator = frame.locator('select').first();
-    const options = await selectLocator.locator('option').allTextContents().catch(() => []);
-    console.log('Select options:', options.map((x) => normalizeSpaces(x)).filter(Boolean));
+  let opened = false;
 
+  for (let i = 0; i < triggers.length; i++) {
+    const trigger = triggers[i];
     try {
-      await selectLocator.selectOption({ label: regionText });
-      await frame.waitForTimeout(500);
-      console.log('Region selected via native select label');
-      return true;
-    } catch (e) {
-      console.log('selectOption by label failed:', e.message);
-    }
+      const visible = await trigger.isVisible({ timeout: 1500 }).catch(() => false);
+      console.log(`Region trigger ${i} visible=${visible}`);
 
-    try {
-      await selectLocator.selectOption({ value: regionText });
-      await frame.waitForTimeout(500);
-      console.log('Region selected via native select value');
-      return true;
+      if (visible) {
+        await trigger.click({ force: true, timeout: 5000 }).catch((e) => {
+          console.log(`Region trigger ${i} click failed:`, e.message);
+        });
+
+        await frame.waitForTimeout(800);
+        opened = true;
+        console.log(`Region dropdown opened via trigger ${i}`);
+        break;
+      }
     } catch (e) {
-      console.log('selectOption by value failed:', e.message);
+      console.log(`Region trigger ${i} error:`, e.message);
     }
   }
 
-  const comboCount = await frame.getByRole('combobox').count().catch(() => 0);
-  console.log('Aantal comboboxes:', comboCount);
+  if (!opened) {
+    console.log('Could not open region dropdown');
+    return false;
+  }
 
-  const combo = frame.getByRole('combobox').first();
-  const comboVisible = await combo.isVisible().catch(() => false);
-  console.log('Combobox visible:', comboVisible);
+  const optionLocators = [
+    frame.getByText(new RegExp(`^${regionText}$`, 'i')).first(),
+    frame.locator(`text=${regionText}`).first(),
+    frame.locator(`[role="option"]:has-text("${regionText}")`).first(),
+    frame.locator(`li:has-text("${regionText}")`).first(),
+    frame.locator(`div:has-text("${regionText}")`).first()
+  ];
 
-  if (comboVisible) {
-    await combo.click({ force: true }).catch((e) => {
-      console.log('Combobox click failed:', e.message);
-    });
-    await frame.waitForTimeout(500);
+  for (let i = 0; i < optionLocators.length; i++) {
+    const option = optionLocators[i];
+    try {
+      const visible = await option.isVisible({ timeout: 2000 }).catch(() => false);
+      console.log(`Region option ${i} visible=${visible}`);
 
-    const option = frame.getByText(new RegExp(`^${regionText}$`, 'i')).first();
-    const optionVisible = await option.isVisible().catch(() => false);
-    console.log('Dropdown option visible:', optionVisible);
+      if (visible) {
+        const txt = await option.textContent().catch(() => '');
+        console.log(`Clicking region option ${i}:`, txt);
 
-    if (optionVisible) {
-      await option.click({ force: true });
-      await frame.waitForTimeout(500);
-      console.log('Region selected via combobox');
-      return true;
+        await option.click({ force: true, timeout: 5000 });
+        await frame.waitForTimeout(800);
+        console.log('Region selected successfully');
+        return true;
+      }
+    } catch (e) {
+      console.log(`Region option ${i} error:`, e.message);
     }
   }
 
+  console.log('Region option not found:', regionText);
   return false;
 }
 
