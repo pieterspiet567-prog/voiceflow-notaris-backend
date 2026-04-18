@@ -41,9 +41,9 @@ function mapRegion(region) {
 }
 
 function getRegionOptions(mappedRegion) {
-  if (mappedRegion === 'Vlaanderen') return ['Vlaanderen', 'Vlaams Gewest'];
-  if (mappedRegion === 'Brussel') return ['Brussel', 'Brussels Hoofdstedelijk Gewest'];
-  if (mappedRegion === 'Wallonië') return ['Wallonië', 'Waals Gewest'];
+  if (mappedRegion === 'Vlaanderen') return ['Vlaanderen'];
+  if (mappedRegion === 'Brussel') return ['Brussel'];
+  if (mappedRegion === 'Wallonië') return ['Wallonië'];
   return [mappedRegion];
 }
 
