@@ -144,8 +144,8 @@ async function fillInputNearLabel(frame, labelCandidates, value) {
     const xpath = `xpath=//*[contains(normalize-space(text()),"${label}")]/following::input[1]`;
     const locator = frame.locator(xpath).first();
     try {
-       			const attached = await locator.count().catch(() => 0) > 0;
-			if (attached) {
+      const count = await locator.count().catch(() => 0);
+      if (count > 0) {
         await locator.fill('');
         await locator.type(stringValue, { delay: 30 });
         await frame.waitForTimeout(200);
@@ -180,40 +180,65 @@ async function clickCalculate(frame) {
 
 async function selectRegion(frame, regionText) {
   console.log('Trying to select region:', regionText);
+
+  // Probeer via directe klik
+  const directOptions = [
+    frame.locator(`label:has-text("${regionText}")`).first(),
+    frame.getByText(regionText, { exact: true }).first(),
+    frame.locator(`[role="option"]:has-text("${regionText}")`).first(),
+    frame.locator(`li:has-text("${regionText}")`).first(),
+  ];
+
+  for (const loc of directOptions) {
+    try {
+      const count = await loc.count().catch(() => 0);
+      if (count > 0) {
+        const visible = await loc.isVisible({ timeout: 1000 }).catch(() => false);
+        if (visible) {
+          await loc.click({ force: true, timeout: 3000 });
+          await frame.waitForTimeout(300);
+          console.log('Region selected via direct click:', regionText);
+          return true;
+        }
+      }
+    } catch (e) {}
+  }
+
+  // Probeer via combobox dropdown
   const triggers = [
     frame.getByRole('combobox').first(),
     frame.locator('label:has-text("Bereken voor")').locator('xpath=following::*[@role="combobox" or self::div or self::button][1]').first(),
   ];
-  let opened = false;
-  for (let i = 0; i < triggers.length; i++) {
-    try {
-      const visible = await triggers[i].isVisible({ timeout: 1500 }).catch(() => false);
-      if (visible) {
-        await triggers[i].click({ force: true, timeout: 3000 }).catch(() => {});
-        await frame.waitForTimeout(500);
-        opened = true;
-        break;
-      }
-    } catch (e) {}
-  }
-  if (!opened) return false;
 
-  const optionLocators = [
-    frame.locator(`[role="option"]:has-text("${regionText}")`).first(),
-    frame.locator(`li:has-text("${regionText}")`).first(),
-    frame.getByText(new RegExp(`^${regionText}$`, 'i')).first(),
-  ];
-  for (const option of optionLocators) {
+  for (const trigger of triggers) {
     try {
-      const visible = await option.isVisible({ timeout: 1500 }).catch(() => false);
+      const visible = await trigger.isVisible({ timeout: 1500 }).catch(() => false);
       if (visible) {
-        await option.click({ force: true, timeout: 3000 });
+        await trigger.click({ force: true, timeout: 3000 }).catch(() => {});
         await frame.waitForTimeout(500);
-        console.log('Region selected successfully');
-        return true;
+
+        const options = [
+          frame.locator(`[role="option"]:has-text("${regionText}")`).first(),
+          frame.locator(`li:has-text("${regionText}")`).first(),
+          frame.getByText(new RegExp(`^${regionText}$`, 'i')).first(),
+        ];
+
+        for (const option of options) {
+          try {
+            const visible = await option.isVisible({ timeout: 1500 }).catch(() => false);
+            if (visible) {
+              await option.click({ force: true, timeout: 3000 });
+              await frame.waitForTimeout(500);
+              console.log('Region selected via dropdown:', regionText);
+              return true;
+            }
+          } catch (e) {}
+        }
       }
     } catch (e) {}
   }
+
+  console.log('Region not found:', regionText);
   return false;
 }
 
@@ -245,7 +270,6 @@ app.post('/calculate', async (req, res) => {
 
   let browser;
   try {
-    // 1. Launch browser
     browser = await chromium.launch({
       headless: true,
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu', '--disable-dev-shm-usage']
@@ -253,31 +277,25 @@ app.post('/calculate', async (req, res) => {
 
     const page = await browser.newPage();
 
-    // Blokkeer onnodige requests om sneller te laden
     await page.route('**/{analytics,gtm,hotjar,doubleclick,facebook,google-analytics}**', route => route.abort());
     await page.route('**/*.{png,jpg,jpeg,gif,svg,woff,woff2,ttf}', route => route.abort());
 
     page.setDefaultTimeout(10000);
     page.setDefaultNavigationTimeout(15000);
 
-    // 2. Goto calculator
     console.log('Goto calculator...');
     await page.goto(CALCULATOR_URL, { waitUntil: 'domcontentloaded' });
 
-    // 3. Accept cookies
     await page.waitForTimeout(800);
     await acceptCookies(page);
 
-    // 4. Find calculator frame
     console.log('Zoek frame...');
     const frame = await getCalculatorFrame(page);
     if (!frame) throw new Error('Calculator iframe niet gevonden');
 
-    // 5. Wacht tot frame geladen is
-   await page.waitForTimeout(3000);
+    await page.waitForTimeout(3000);
     console.log('Frame geladen');
 
-    // 6. Select region
     let regionClicked = false;
     for (const option of regionOptions) {
       regionClicked = await selectRegion(frame, option);
@@ -285,41 +303,33 @@ app.post('/calculate', async (req, res) => {
     }
     if (!regionClicked) throw new Error(`Kon regio niet selecteren: ${mappedRegion}`);
 
-    // 7. Select property type
     const propertyIndex = mappedPropertyType === 'Woning / appartement' ? 0 : 1;
     const propertyClicked = await clickRadioInFieldsetByIndex(frame, 1, propertyIndex);
     if (!propertyClicked) throw new Error(`Kon propertyType niet selecteren: ${mappedPropertyType}`);
 
-    // 8. Select own and only home
     const ownHomeClicked = await clickRadioInFieldsetByIndex(frame, 2, parsedOwnAndOnlyHome ? 0 : 1);
     if (!ownHomeClicked) throw new Error('Kon ownAndOnlyHome niet selecteren');
 
-    // 9. Fill price
     const priceFilled = await fillInputNearLabel(frame, ['Aankoopbedrag'], normalizedPrice);
     if (!priceFilled) throw new Error('Kon aankoopbedrag niet invullen');
 
-    // 10. Select purchase mode
     const purchaseIndex =
       mappedPurchaseMode === 'Aankoop met registratierechten' ? 0 :
       mappedPurchaseMode === 'Aankoop met BTW' ? 1 : 2;
     const purchaseModeClicked = await clickRadioInFieldsetByIndex(frame, 3, purchaseIndex);
     if (!purchaseModeClicked) throw new Error(`Kon purchaseMode niet selecteren: ${mappedPurchaseMode}`);
 
-    // 11. Select kernstad
     if (mappedPurchaseMode === 'Aankoop met registratierechten') {
       const kernstadClicked = await clickRadioInFieldsetByIndex(frame, 4, parsedKernstad ? 0 : 1);
       if (!kernstadClicked) throw new Error('Kon kernstad niet selecteren');
     }
 
-    // 12. Click calculate
     const calculateClicked = await clickCalculate(frame);
     if (!calculateClicked) throw new Error('Bereken-knop niet gevonden');
 
-    // 13. Wacht op resultaat
     console.log('Wacht op resultaat...');
     await page.waitForTimeout(5000);
 
-    // 14. Read result
     const frameText = await frame.locator('body').textContent();
     const resultText = frameText || '';
 
