@@ -279,7 +279,7 @@ app.post('/calculate', async (req, res) => {
     const frame = await getCalculatorFrame(page);
     if (!frame) throw new Error('Calculator iframe niet gevonden');
 
-    await page.waitForTimeout(3000);
+    await page.waitForTimeout(2000);
     console.log('Frame geladen');
 
     // 6. Select region
@@ -318,7 +318,7 @@ app.post('/calculate', async (req, res) => {
 
     // 13. Wacht op resultaat
     console.log('Wacht op resultaat...');
-    await page.waitForTimeout(5000);
+    await page.waitForTimeout(3000);
 
     // 14. Read result
     const frameText = await frame.locator('body').textContent();
