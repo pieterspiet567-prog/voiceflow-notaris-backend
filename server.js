@@ -357,7 +357,7 @@ app.post('/calculate', async (req, res) => {
   } finally {
     if (browser) {
       await browser.close().catch(() => {});
-      console.log('Browser closed');
+      console.log('Browser closed'); 
     }
   }
 });
