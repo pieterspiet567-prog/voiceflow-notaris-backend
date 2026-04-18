@@ -120,21 +120,71 @@ async function getCalculatorFrame(page) {
   return null;
 }
 
-async function clickRadioInFieldsetByIndex(frame, fieldsetIndex, optionIndex) {
-  const radios = frame.locator('fieldset').nth(fieldsetIndex).locator('input[type="radio"]');
-  const count = await radios.count().catch(() => 0);
-  if (count === 0 || optionIndex >= count) return false;
+async function selectRegion(frame, regionText) {
+  console.log('Trying to select region:', regionText);
+
+  // Probeer via native select element
   try {
-    const radio = radios.nth(optionIndex);
-    await radio.check({ force: true }).catch(async () => {
-      await radio.click({ force: true, timeout: 3000 });
-    });
-    await frame.waitForTimeout(300);
-    return true;
+    const select = frame.locator('select').first();
+    const count = await select.count().catch(() => 0);
+    if (count > 0) {
+      await select.selectOption({ label: regionText });
+      await frame.waitForTimeout(300);
+      console.log('Region selected via select:', regionText);
+      return true;
+    }
   } catch (e) {
-    console.log('clickRadioInFieldsetByIndex failed:', e.message);
-    return false;
+    console.log('Select failed:', e.message);
   }
+
+  // Probeer via combobox
+  try {
+    const combobox = frame.getByRole('combobox').first();
+    const visible = await combobox.isVisible({ timeout: 1500 }).catch(() => false);
+    if (visible) {
+      await combobox.selectOption({ label: regionText });
+      await frame.waitForTimeout(300);
+      console.log('Region selected via combobox:', regionText);
+      return true;
+    }
+  } catch (e) {
+    console.log('Combobox failed:', e.message);
+  }
+
+  console.log('Region not found:', regionText);
+  return false;
+}
+
+async function clickRadioByLabel(frame, labelText) {
+  console.log('Clicking radio by label:', labelText);
+  try {
+    const label = frame.locator('label').filter({ hasText: labelText }).first();
+    const count = await label.count().catch(() => 0);
+    if (count > 0) {
+      await label.click({ force: true, timeout: 3000 });
+      await frame.waitForTimeout(300);
+      console.log('Radio clicked via label:', labelText);
+      return true;
+    }
+  } catch (e) {
+    console.log('clickRadioByLabel failed:', e.message);
+  }
+
+  // Fallback: zoek via tekst
+  try {
+    const locator = frame.getByText(labelText, { exact: true }).first();
+    const count = await locator.count().catch(() => 0);
+    if (count > 0) {
+      await locator.click({ force: true, timeout: 3000 });
+      await frame.waitForTimeout(300);
+      console.log('Radio clicked via text:', labelText);
+      return true;
+    }
+  } catch (e) {
+    console.log('clickRadioByLabel text fallback failed:', e.message);
+  }
+
+  return false;
 }
 
 async function fillInputNearLabel(frame, labelCandidates, value) {
@@ -175,41 +225,6 @@ async function clickCalculate(frame) {
       }
     } catch (e) {}
   }
-  return false;
-}
-
-async function selectRegion(frame, regionText) {
-  console.log('Trying to select region:', regionText);
-
-  // Probeer via native select element
-  try {
-    const select = frame.locator('select').first();
-    const count = await select.count().catch(() => 0);
-    if (count > 0) {
-      await select.selectOption({ label: regionText });
-      await frame.waitForTimeout(300);
-      console.log('Region selected via select:', regionText);
-      return true;
-    }
-  } catch (e) {
-    console.log('Select failed:', e.message);
-  }
-
-  // Probeer via combobox
-  try {
-    const combobox = frame.getByRole('combobox').first();
-    const visible = await combobox.isVisible({ timeout: 1500 }).catch(() => false);
-    if (visible) {
-      await combobox.selectOption({ label: regionText });
-      await frame.waitForTimeout(300);
-      console.log('Region selected via combobox:', regionText);
-      return true;
-    }
-  } catch (e) {
-    console.log('Combobox failed:', e.message);
-  }
-
-  console.log('Region not found:', regionText);
   return false;
 }
 
@@ -267,6 +282,7 @@ app.post('/calculate', async (req, res) => {
     await page.waitForTimeout(3000);
     console.log('Frame geladen');
 
+    // 6. Select region
     let regionClicked = false;
     for (const option of regionOptions) {
       regionClicked = await selectRegion(frame, option);
@@ -274,33 +290,37 @@ app.post('/calculate', async (req, res) => {
     }
     if (!regionClicked) throw new Error(`Kon regio niet selecteren: ${mappedRegion}`);
 
-    const propertyIndex = mappedPropertyType === 'Woning / appartement' ? 0 : 1;
-    const propertyClicked = await clickRadioInFieldsetByIndex(frame, 1, propertyIndex);
+    // 7. Select property type
+    const propertyClicked = await clickRadioByLabel(frame, mappedPropertyType);
     if (!propertyClicked) throw new Error(`Kon propertyType niet selecteren: ${mappedPropertyType}`);
 
-    const ownHomeClicked = await clickRadioInFieldsetByIndex(frame, 2, parsedOwnAndOnlyHome ? 0 : 1);
+    // 8. Select own and only home
+    const ownHomeClicked = await clickRadioByLabel(frame, parsedOwnAndOnlyHome ? 'Ja' : 'Nee');
     if (!ownHomeClicked) throw new Error('Kon ownAndOnlyHome niet selecteren');
 
+    // 9. Fill price
     const priceFilled = await fillInputNearLabel(frame, ['Aankoopbedrag'], normalizedPrice);
     if (!priceFilled) throw new Error('Kon aankoopbedrag niet invullen');
 
-    const purchaseIndex =
-      mappedPurchaseMode === 'Aankoop met registratierechten' ? 0 :
-      mappedPurchaseMode === 'Aankoop met BTW' ? 1 : 2;
-    const purchaseModeClicked = await clickRadioInFieldsetByIndex(frame, 3, purchaseIndex);
+    // 10. Select purchase mode
+    const purchaseModeClicked = await clickRadioByLabel(frame, mappedPurchaseMode);
     if (!purchaseModeClicked) throw new Error(`Kon purchaseMode niet selecteren: ${mappedPurchaseMode}`);
 
+    // 11. Select kernstad
     if (mappedPurchaseMode === 'Aankoop met registratierechten') {
-      const kernstadClicked = await clickRadioInFieldsetByIndex(frame, 4, parsedKernstad ? 0 : 1);
+      const kernstadClicked = await clickRadioByLabel(frame, parsedKernstad ? 'Ja' : 'Nee / weet het niet');
       if (!kernstadClicked) throw new Error('Kon kernstad niet selecteren');
     }
 
+    // 12. Click calculate
     const calculateClicked = await clickCalculate(frame);
     if (!calculateClicked) throw new Error('Bereken-knop niet gevonden');
 
+    // 13. Wacht op resultaat
     console.log('Wacht op resultaat...');
     await page.waitForTimeout(5000);
 
+    // 14. Read result
     const frameText = await frame.locator('body').textContent();
     const resultText = frameText || '';
 
