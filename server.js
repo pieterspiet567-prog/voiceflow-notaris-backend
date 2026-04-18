@@ -144,8 +144,8 @@ async function fillInputNearLabel(frame, labelCandidates, value) {
     const xpath = `xpath=//*[contains(normalize-space(text()),"${label}")]/following::input[1]`;
     const locator = frame.locator(xpath).first();
     try {
-      const visible = await locator.isVisible({ timeout: 1500 }).catch(() => false);
-      if (visible) {
+       			const attached = await locator.count().catch(() => 0) > 0;
+			if (attached) {
         await locator.fill('');
         await locator.type(stringValue, { delay: 30 });
         await frame.waitForTimeout(200);
@@ -274,7 +274,7 @@ app.post('/calculate', async (req, res) => {
     if (!frame) throw new Error('Calculator iframe niet gevonden');
 
     // 5. Wacht tot frame geladen is
-    await frame.waitForSelector('input[type="radio"]', { timeout: 8000 });
+   await page.waitForTimeout(3000);
     console.log('Frame geladen');
 
     // 6. Select region
@@ -317,7 +317,7 @@ app.post('/calculate', async (req, res) => {
 
     // 13. Wacht op resultaat
     console.log('Wacht op resultaat...');
-    await frame.waitForSelector('text=Het totaal van de kosten', { timeout: 12000 });
+    await page.waitForTimeout(5000);
 
     // 14. Read result
     const frameText = await frame.locator('body').textContent();
@@ -357,7 +357,7 @@ app.post('/calculate', async (req, res) => {
   } finally {
     if (browser) {
       await browser.close().catch(() => {});
-      console.log('Browser closed'); 
+      console.log('Browser closed');
     }
   }
 });
