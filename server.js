@@ -181,61 +181,32 @@ async function clickCalculate(frame) {
 async function selectRegion(frame, regionText) {
   console.log('Trying to select region:', regionText);
 
-  // Probeer via directe klik
-  const directOptions = [
-    frame.locator(`label:has-text("${regionText}")`).first(),
-    frame.getByText(regionText, { exact: true }).first(),
-    frame.locator(`[role="option"]:has-text("${regionText}")`).first(),
-    frame.locator(`li:has-text("${regionText}")`).first(),
-  ];
-
-  for (const loc of directOptions) {
-    try {
-      const count = await loc.count().catch(() => 0);
-      if (count > 0) {
-        const visible = await loc.isVisible({ timeout: 1000 }).catch(() => false);
-        if (visible) {
-          await loc.click({ force: true, timeout: 3000 });
-          await frame.waitForTimeout(300);
-          console.log('Region selected via direct click:', regionText);
-          return true;
-        }
-      }
-    } catch (e) {}
+  // Probeer via native select element
+  try {
+    const select = frame.locator('select').first();
+    const count = await select.count().catch(() => 0);
+    if (count > 0) {
+      await select.selectOption({ label: regionText });
+      await frame.waitForTimeout(300);
+      console.log('Region selected via select:', regionText);
+      return true;
+    }
+  } catch (e) {
+    console.log('Select failed:', e.message);
   }
 
-  // Probeer via combobox dropdown
-  const triggers = [
-    frame.getByRole('combobox').first(),
-    frame.locator('label:has-text("Bereken voor")').locator('xpath=following::*[@role="combobox" or self::div or self::button][1]').first(),
-  ];
-
-  for (const trigger of triggers) {
-    try {
-      const visible = await trigger.isVisible({ timeout: 1500 }).catch(() => false);
-      if (visible) {
-        await trigger.click({ force: true, timeout: 3000 }).catch(() => {});
-        await frame.waitForTimeout(500);
-
-        const options = [
-          frame.locator(`[role="option"]:has-text("${regionText}")`).first(),
-          frame.locator(`li:has-text("${regionText}")`).first(),
-          frame.getByText(new RegExp(`^${regionText}$`, 'i')).first(),
-        ];
-
-        for (const option of options) {
-          try {
-            const visible = await option.isVisible({ timeout: 1500 }).catch(() => false);
-            if (visible) {
-              await option.click({ force: true, timeout: 3000 });
-              await frame.waitForTimeout(500);
-              console.log('Region selected via dropdown:', regionText);
-              return true;
-            }
-          } catch (e) {}
-        }
-      }
-    } catch (e) {}
+  // Probeer via combobox
+  try {
+    const combobox = frame.getByRole('combobox').first();
+    const visible = await combobox.isVisible({ timeout: 1500 }).catch(() => false);
+    if (visible) {
+      await combobox.selectOption({ label: regionText });
+      await frame.waitForTimeout(300);
+      console.log('Region selected via combobox:', regionText);
+      return true;
+    }
+  } catch (e) {
+    console.log('Combobox failed:', e.message);
   }
 
   console.log('Region not found:', regionText);
