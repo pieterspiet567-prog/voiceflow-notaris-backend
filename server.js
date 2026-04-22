@@ -187,6 +187,27 @@ async function clickRadioByLabel(frame, labelText) {
   return false;
 }
 
+// Klik een radio-optie binnen de sectie die de opgegeven vraag bevat.
+// questionText: deel van de vraagtekst (bv. 'Eigen en enige woning')
+// answerText:   exacte labeltekst van het antwoord (bv. 'Ja' of 'Nee')
+async function clickRadioNearQuestion(frame, questionText, answerText) {
+  console.log(`Clicking radio near question "${questionText}": ${answerText}`);
+  try {
+    const xpath = `xpath=//*[contains(normalize-space(.),"${questionText}")]/following::label[normalize-space(.)="${answerText}"][1]`;
+    const label = frame.locator(xpath).first();
+    const count = await label.count().catch(() => 0);
+    if (count > 0) {
+      await label.click({ force: true, timeout: 3000 });
+      await frame.waitForTimeout(300);
+      console.log(`Radio clicked near question "${questionText}": ${answerText}`);
+      return true;
+    }
+  } catch (e) {
+    console.log(`clickRadioNearQuestion failed for "${questionText}":`, e.message);
+  }
+  // Fallback naar generieke methode
+  return clickRadioByLabel(frame, answerText);
+}
 async function fillInputNearLabel(frame, labelCandidates, value) {
   if (value === undefined || value === null || value === '') return false;
   const stringValue = String(value);
@@ -250,7 +271,7 @@ app.post('/calculate', async (req, res) => {
   if (parsedOwnAndOnlyHome === null) return res.status(400).json({ success: false, error: 'Ongeldige ownAndOnlyHome' });
   if (!mappedPurchaseMode) return res.status(400).json({ success: false, error: 'Ongeldige purchaseMode' });
   if (!normalizedPrice) return res.status(400).json({ success: false, error: 'Ongeldige prijs' });
-  if (mappedPurchaseMode === 'Aankoop met registratierechten' && parsedKernstad === null) {
+  if (mappedPurchaseMode === 'Aankoop met registratierechten' && parsedOwnAndOnlyHome === true && parsedKernstad === null) {
     return res.status(400).json({ success: false, error: 'Ongeldige kernstad' });
   }
 
@@ -295,22 +316,22 @@ app.post('/calculate', async (req, res) => {
     if (!propertyClicked) throw new Error(`Kon propertyType niet selecteren: ${mappedPropertyType}`);
 
     // 8. Select own and only home
-    const ownHomeClicked = await clickRadioByLabel(frame, parsedOwnAndOnlyHome ? 'Ja' : 'Nee');
+    const ownHomeClicked = await clickRadioNearQuestion(frame, 'Eigen en enige woning', parsedOwnAndOnlyHome ? 'Ja' : 'Nee');
     if (!ownHomeClicked) throw new Error('Kon ownAndOnlyHome niet selecteren');
 
-    // 9. Fill price
+    // 9. Select kernstad — moet direct na ownAndOnlyHome, want verdwijnt als 'Nee' gekozen wordt
+    if (parsedOwnAndOnlyHome && mappedPurchaseMode === 'Aankoop met registratierechten') {
+      const kernstadClicked = await clickRadioNearQuestion(frame, 'kernstad', parsedKernstad ? 'Ja' : 'Nee / weet het niet');
+      if (!kernstadClicked) throw new Error('Kon kernstad niet selecteren');
+    }
+
+    // 10. Fill price
     const priceFilled = await fillInputNearLabel(frame, ['Aankoopbedrag'], normalizedPrice);
     if (!priceFilled) throw new Error('Kon aankoopbedrag niet invullen');
 
-    // 10. Select purchase mode
+    // 11. Select purchase mode
     const purchaseModeClicked = await clickRadioByLabel(frame, mappedPurchaseMode);
     if (!purchaseModeClicked) throw new Error(`Kon purchaseMode niet selecteren: ${mappedPurchaseMode}`);
-
-    // 11. Select kernstad
-    if (mappedPurchaseMode === 'Aankoop met registratierechten') {
-      const kernstadClicked = await clickRadioByLabel(frame, parsedKernstad ? 'Ja' : 'Nee / weet het niet');
-      if (!kernstadClicked) throw new Error('Kon kernstad niet selecteren');
-    }
 
     // 12. Click calculate
     const calculateClicked = await clickCalculate(frame);
