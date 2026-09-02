@@ -2,17 +2,18 @@ const express = require("express");
 const { chromium } = require("playwright");
 
 const app = express();
+
 app.use(express.json());
 
-const NOTARIS_PAGE =
-  "https://www.notaris.be/rekenmodules/wonen/kosten-berekenen-voor-een-standaardkrediet";
+const URL =
+  "https://calculator.notaris.be/nl/krediet?token=6ea42f0f-c4a7-5a6c-9307-60d23432dd5f";
 
 const PORT = process.env.PORT || 3000;
 
-let browser = null;
+async function calculateNotarisKosten(kredietbedrag) {
+  let browser;
 
-async function getBrowser() {
-  if (!browser || !browser.isConnected()) {
+  try {
     browser = await chromium.launch({
       headless: true,
       args: [
@@ -21,458 +22,334 @@ async function getBrowser() {
         "--disable-dev-shm-usage"
       ]
     });
-  }
 
-  return browser;
-}
-
-function cleanAmount(value) {
-  if (!value) return null;
-
-  return value
-    .replace(/\u00a0/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-async function acceptCookies(page) {
-  const possibleButtons = [
-    /alle cookies toestaan/i,
-    /accepteer alle cookies/i,
-    /alles accepteren/i,
-    /accept all/i
-  ];
-
-  for (const text of possibleButtons) {
-    try {
-      const button = page.getByRole("button", { name: text }).first();
-
-      if (await button.isVisible({ timeout: 1000 })) {
-        await button.click();
-        await page.waitForTimeout(500);
-        return;
+    const page = await browser.newPage({
+      viewport: {
+        width: 1440,
+        height: 1200
       }
-    } catch {}
-  }
-}
+    });
 
-async function getCalculatorUrl(page) {
-  await page.goto(NOTARIS_PAGE, {
-    waitUntil: "domcontentloaded",
-    timeout: 60000
-  });
+    console.log("Calculator openen...");
 
-  await acceptCookies(page);
+    await page.goto(URL, {
+      waitUntil: "domcontentloaded",
+      timeout: 60000
+    });
 
-  const calculatorLink = page.locator(
-    'a[href*="calculator.notaris.be"]'
-  ).first();
+    await page.waitForTimeout(3000);
 
-  await calculatorLink.waitFor({
-    state: "attached",
-    timeout: 15000
-  });
+    console.log("URL:", page.url());
 
-  const href = await calculatorLink.getAttribute("href");
+    /*
+     * Debug: toon alle inputs
+     */
+    const inputInfo = await page.locator("input").evaluateAll(inputs =>
+      inputs.map((el, index) => ({
+        index,
+        type: el.type,
+        name: el.name,
+        id: el.id,
+        placeholder: el.placeholder,
+        value: el.value
+      }))
+    );
 
-  if (!href) {
-    throw new Error("Calculator-link niet gevonden op notaris.be");
-  }
+    console.log("INPUTS:", inputInfo);
 
-  return href;
-}
+    /*
+     * Zoek zichtbare tekst/number inputs.
+     */
+    const inputs = page.locator(
+      'input[type="text"], input[type="number"], input:not([type])'
+    );
 
-async function fillAmount(page, kredietbedrag) {
-  /*
-   * Eerst proberen we het veld op basis van labels / aria-labels /
-   * placeholders te vinden.
-   */
-  const selectors = [
-    'input[name*="krediet" i]',
-    'input[id*="krediet" i]',
-    'input[placeholder*="krediet" i]',
-    'input[aria-label*="krediet" i]',
-    'input[name*="bedrag" i]',
-    'input[id*="bedrag" i]',
-    'input[placeholder*="bedrag" i]',
-    'input[aria-label*="bedrag" i]',
-    'input[type="number"]'
-  ];
+    const count = await inputs.count();
 
-  for (const selector of selectors) {
-    try {
-      const fields = page.locator(selector);
-      const count = await fields.count();
+    console.log("Aantal bedragvelden:", count);
 
-      for (let i = 0; i < count; i++) {
-        const field = fields.nth(i);
+    if (count === 0) {
+      throw new Error("Geen invulvelden gevonden");
+    }
 
-        if (await field.isVisible()) {
-          await field.fill(String(kredietbedrag));
-          console.log(`Bedrag ingevuld via ${selector}`);
-          return true;
-        }
+    /*
+     * Vul eerste bruikbare bedragveld.
+     */
+    let ingevuld = false;
+
+    for (let i = 0; i < count; i++) {
+      const input = inputs.nth(i);
+
+      try {
+        if (!(await input.isVisible())) continue;
+
+        await input.click();
+
+        await input.fill("");
+
+        await input.fill(String(kredietbedrag));
+
+        console.log("Bedrag ingevuld in input", i);
+
+        ingevuld = true;
+        break;
+
+      } catch (err) {
+        console.log(
+          `Input ${i} kon niet ingevuld worden:`,
+          err.message
+        );
       }
-    } catch {}
-  }
+    }
 
-  /*
-   * Fallback:
-   * zoek alle zichtbare inputs en kies het eerste veld dat
-   * geen checkbox/radio/search/etc. is.
-   */
-  const inputs = page.locator("input");
-  const count = await inputs.count();
+    if (!ingevuld) {
+      throw new Error("Kredietbedrag kon niet ingevuld worden");
+    }
 
-  for (let i = 0; i < count; i++) {
-    const input = inputs.nth(i);
+    await page.waitForTimeout(1000);
 
-    try {
-      if (!(await input.isVisible())) continue;
+    /*
+     * Zoek alle radio-knoppen.
+     */
+    const radios = page.locator('input[type="radio"]');
 
-      const type = (await input.getAttribute("type")) || "text";
+    const radioCount = await radios.count();
 
-      if (
-        [
-          "hidden",
-          "checkbox",
-          "radio",
-          "submit",
-          "button",
-          "search"
-        ].includes(type.toLowerCase())
-      ) {
-        continue;
-      }
+    console.log("Aantal radio buttons:", radioCount);
 
-      await input.fill(String(kredietbedrag));
-
-      console.log(`Bedrag ingevuld in input ${i}`);
-      return true;
-    } catch {}
-  }
-
-  return false;
-}
-
-async function answerQuestions(page) {
-  /*
-   * De kredietcalculator kan bijkomende Ja/Nee-vragen tonen.
-   * We proberen hier "Ja" te selecteren wanneer vereist.
-   */
-
-  const radioGroups = page.locator('input[type="radio"]');
-  const radioCount = await radioGroups.count();
-
-  if (radioCount > 0) {
+    /*
+     * Selecteer eerste optie per groep.
+     *
+     * Bij de oude calculator waren dit de Ja-keuzes.
+     */
     const handledNames = new Set();
 
     for (let i = 0; i < radioCount; i++) {
-      const radio = radioGroups.nth(i);
+      const radio = radios.nth(i);
 
       const name = await radio.getAttribute("name");
 
-      if (!name || handledNames.has(name)) continue;
+      if (!name || handledNames.has(name)) {
+        continue;
+      }
 
       handledNames.add(name);
 
-      /*
-       * Zoek binnen deze groep naar een optie die Ja / yes voorstelt.
-       */
-      const group = page.locator(`input[type="radio"][name="${name}"]`);
+      const group = page.locator(
+        `input[type="radio"][name="${name}"]`
+      );
+
       const groupCount = await group.count();
 
-      let clicked = false;
+      console.log(
+        `Radio groep "${name}" bevat ${groupCount} opties`
+      );
+
+      /*
+       * Probeer eerst Ja.
+       */
+      let selected = false;
 
       for (let j = 0; j < groupCount; j++) {
-        const item = group.nth(j);
+        const option = group.nth(j);
 
         const value =
-          ((await item.getAttribute("value")) || "").toLowerCase();
+          ((await option.getAttribute("value")) || "")
+            .toLowerCase();
 
-        const id = await item.getAttribute("id");
+        const id = await option.getAttribute("id");
 
-        let labelText = "";
+        let label = "";
 
         if (id) {
           try {
-            labelText = await page
+            label = await page
               .locator(`label[for="${id}"]`)
               .innerText();
           } catch {}
         }
 
-        const combined = `${value} ${labelText}`.toLowerCase();
+        console.log(
+          "Radio:",
+          name,
+          value,
+          label
+        );
 
         if (
-          combined.includes("ja") ||
-          combined.includes("yes") ||
+          label.toLowerCase().includes("ja") ||
+          value === "ja" ||
+          value === "yes" ||
           value === "true"
         ) {
           try {
-            await item.check({ force: true });
-            clicked = true;
+            await option.check({
+              force: true
+            });
+
+            selected = true;
+
+            console.log(
+              `Ja gekozen bij ${name}`
+            );
+
             break;
+
           } catch {}
         }
       }
 
       /*
-       * Indien we geen Ja vinden, selecteren we eerste mogelijkheid.
+       * Geen Ja gevonden:
+       * selecteer eerste optie.
        */
-      if (!clicked && groupCount > 0) {
+      if (!selected && groupCount > 0) {
         try {
-          await group.first().check({ force: true });
+          await group.first().check({
+            force: true
+          });
+
+          console.log(
+            `Eerste optie gekozen bij ${name}`
+          );
+
         } catch {}
       }
     }
-  }
-}
 
-async function clickCalculate(page) {
-  const possibleButtons = [
-    /bereken/i,
-    /berekenen/i,
-    /volgende/i,
-    /bereken kosten/i
-  ];
-
-  for (const name of possibleButtons) {
-    try {
-      const button = page
-        .getByRole("button", { name })
-        .filter({ visible: true })
-        .first();
-
-      if (await button.isVisible({ timeout: 1000 })) {
-        await button.click();
-
-        console.log(`Knop geklikt: ${name}`);
-
-        return true;
-      }
-    } catch {}
-  }
-
-  /*
-   * Fallback voor submit-inputs.
-   */
-  try {
-    const submit = page
-      .locator('button[type="submit"], input[type="submit"]')
-      .first();
-
-    if (await submit.isVisible()) {
-      await submit.click();
-      return true;
-    }
-  } catch {}
-
-  return false;
-}
-
-function extractEuroAmounts(text) {
-  const normalized = text
-    .replace(/\u00a0/g, " ")
-    .replace(/\r/g, "")
-    .replace(/\n+/g, "\n");
-
-  const regex =
-    /€\s*[0-9]{1,3}(?:[.\s][0-9]{3})*(?:,[0-9]{1,2})?|€\s*[0-9]+(?:,[0-9]{1,2})?/g;
-
-  const matches = normalized.match(regex) || [];
-
-  return matches.map(cleanAmount);
-}
-
-async function calculateNotarisKosten(kredietbedrag) {
-  const browserInstance = await getBrowser();
-
-  const context = await browserInstance.newContext({
-    viewport: {
-      width: 1600,
-      height: 1000
-    },
-    locale: "nl-BE"
-  });
-
-  const page = await context.newPage();
-
-  try {
-    console.log("Notaris-pagina openen...");
-
-    const calculatorUrl = await getCalculatorUrl(page);
-
-    console.log("Calculator gevonden:", calculatorUrl);
-
-    await page.goto(calculatorUrl, {
-      waitUntil: "domcontentloaded",
-      timeout: 60000
-    });
-
-    await page.waitForTimeout(1500);
-
-    await acceptCookies(page);
-
-    console.log("Calculator geopend:", page.url());
+    await page.waitForTimeout(1000);
 
     /*
-     * Bedrag invullen
+     * Zoek knop.
      */
-    const amountFilled = await fillAmount(
-      page,
-      kredietbedrag
-    );
+    const buttons = page.locator("button");
 
-    if (!amountFilled) {
-      throw new Error(
-        "Geen veld voor het kredietbedrag gevonden"
+    const buttonCount = await buttons.count();
+
+    console.log("BUTTONS:", buttonCount);
+
+    let berekend = false;
+
+    for (let i = 0; i < buttonCount; i++) {
+      const button = buttons.nth(i);
+
+      try {
+        if (!(await button.isVisible())) continue;
+
+        const text =
+          (await button.innerText())
+            .trim()
+            .toLowerCase();
+
+        console.log(`Button ${i}: "${text}"`);
+
+        if (
+          text.includes("bereken") ||
+          text.includes("volgende")
+        ) {
+          await button.click();
+
+          console.log(
+            "Knop geklikt:",
+            text
+          );
+
+          berekend = true;
+
+          break;
+        }
+
+      } catch {}
+    }
+
+    if (!berekend) {
+      /*
+       * Mogelijk is formulier automatisch.
+       */
+      console.log(
+        "Geen Bereken-knop gevonden. Resultaat controleren..."
       );
     }
 
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(4000);
 
     /*
-     * Eventuele bijkomende vragen beantwoorden.
+     * Complete tekst uitlezen.
      */
-    await answerQuestions(page);
-
-    await page.waitForTimeout(500);
-
-    /*
-     * Berekenen
-     */
-    const clicked = await clickCalculate(page);
-
-    if (!clicked) {
-      throw new Error(
-        "Bereken-knop niet gevonden op de calculator"
-      );
-    }
-
-    /*
-     * Wachten tot resultaat geladen is.
-     */
-    await page.waitForTimeout(3000);
-
-    /*
-     * Sommige calculators laden resultaten dynamisch.
-     */
-    try {
-      await page.waitForLoadState("networkidle", {
-        timeout: 5000
-      });
-    } catch {}
-
-    const bodyText = await page.locator("body").innerText();
+    const bodyText =
+      await page.locator("body").innerText();
 
     console.log(
-      "Resultaattekst:",
-      bodyText.substring(0, 3000)
+      "BODY RESULTAAT:"
     );
 
-    const euroBedragen = extractEuroAmounts(bodyText);
-
-    console.log("Eurobedragen:", euroBedragen);
-
-    if (euroBedragen.length === 0) {
-      throw new Error(
-        "Geen bedragen gevonden in resultaat van Notaris.be"
-      );
-    }
+    console.log(bodyText);
 
     /*
-     * We proberen de resultaten ook op hun naam te herkennen.
+     * Eurobedragen zoeken.
      */
-    function findAmountAfter(label) {
-      const escaped = label.replace(
-        /[.*+?^${}()|[\]\\]/g,
-        "\\$&"
+    const euroBedragen =
+      bodyText.match(
+        /€\s?[\d.\s]+(?:,\d{1,2})?/g
+      ) || [];
+
+    const cleaned = euroBedragen.map(value =>
+      value
+        .replace(/\u00a0/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+    );
+
+    console.log(
+      "GEVONDEN BEDRAGEN:",
+      cleaned
+    );
+
+    if (cleaned.length === 0) {
+      throw new Error(
+        "Calculator geopend maar geen resultaten gevonden"
       );
-
-      const regex = new RegExp(
-        `${escaped}[\\s\\S]{0,100}?(€\\s*[\\d.\\s]+(?:,\\d{1,2})?)`,
-        "i"
-      );
-
-      const match = bodyText.match(regex);
-
-      return match ? cleanAmount(match[1]) : null;
     }
-
-    const resultaten = {
-      totaal:
-        findAmountAfter("Totaal") ||
-        euroBedragen[0] ||
-        null,
-
-      registratiebelasting:
-        findAmountAfter("Registratiebelasting") ||
-        findAmountAfter("Registratierecht") ||
-        euroBedragen[1] ||
-        null,
-
-      forfait:
-        findAmountAfter("Forfait") ||
-        euroBedragen[2] ||
-        null,
-
-      hypotheekrecht:
-        findAmountAfter("Hypotheekrecht") ||
-        euroBedragen[3] ||
-        null,
-
-      retributie:
-        findAmountAfter("Retributie") ||
-        euroBedragen[4] ||
-        null,
-
-      ereloon:
-        findAmountAfter("Ereloon") ||
-        euroBedragen[5] ||
-        null,
-
-      administratieve_kosten:
-        findAmountAfter("Administratieve kosten") ||
-        euroBedragen[6] ||
-        null,
-
-      uitgaven_aan_derden:
-        findAmountAfter("Uitgaven aan derden") ||
-        euroBedragen[7] ||
-        null,
-
-      recht_op_geschriften:
-        findAmountAfter("Recht op geschriften") ||
-        euroBedragen[8] ||
-        null,
-
-      btw:
-        findAmountAfter("BTW") ||
-        euroBedragen[9] ||
-        null
-    };
 
     return {
       success: true,
       kredietbedrag,
       bron: "notaris.be",
-      calculatorUrl: page.url(),
-      resultaten
+      resultaten: {
+        totaal: cleaned[0] || null,
+        registratiebelasting:
+          cleaned[1] || null,
+        forfait:
+          cleaned[2] || null,
+        hypotheekrecht:
+          cleaned[3] || null,
+        retributie:
+          cleaned[4] || null,
+        ereloon:
+          cleaned[5] || null,
+        administratieve_kosten:
+          cleaned[6] || null,
+        uitgaven_aan_derden:
+          cleaned[7] || null,
+        recht_op_geschriften:
+          cleaned[8] || null,
+        btw:
+          cleaned[9] || null
+      }
     };
+
   } finally {
-    await context.close();
+    if (browser) {
+      await browser.close();
+    }
   }
 }
 
-/*
- * API
- */
-
 app.post("/bereken", async (req, res) => {
-  const kredietbedrag = String(
-    req.body.bedrag || ""
-  ).replace(/[^\d]/g, "");
+
+  const kredietbedrag =
+    String(req.body.bedrag || "")
+      .replace(/[^\d]/g, "");
 
   if (!kredietbedrag) {
     return res.status(400).json({
@@ -482,19 +359,25 @@ app.post("/bereken", async (req, res) => {
   }
 
   try {
-    console.log(
-      `Berekening gestart voor €${kredietbedrag}`
-    );
 
-    const result = await calculateNotarisKosten(
+    console.log(
+      "START BEREKENING:",
       kredietbedrag
     );
 
-    console.log("Berekening gelukt");
+    const result =
+      await calculateNotarisKosten(
+        kredietbedrag
+      );
 
     return res.json(result);
+
   } catch (err) {
-    console.error("BEREKENING MISLUKT:", err);
+
+    console.error(
+      "BEREKENING MISLUKT:",
+      err
+    );
 
     return res.status(500).json({
       success: false,
@@ -504,10 +387,6 @@ app.post("/bereken", async (req, res) => {
   }
 });
 
-/*
- * Health check
- */
-
 app.get("/", (req, res) => {
   res.send("Notaris bot API werkt");
 });
@@ -515,31 +394,12 @@ app.get("/", (req, res) => {
 app.get("/status", (req, res) => {
   res.json({
     success: true,
-    status: "online",
-    browserConnected:
-      browser?.isConnected() || false
+    status: "online"
   });
 });
 
-const server = app.listen(PORT, () => {
-  console.log(`API draait op poort ${PORT}`);
+app.listen(PORT, () => {
+  console.log(
+    `API draait op poort ${PORT}`
+  );
 });
-
-/*
- * Browser netjes sluiten
- */
-
-async function shutdown() {
-  console.log("Server afsluiten...");
-
-  server.close();
-
-  if (browser) {
-    await browser.close();
-  }
-
-  process.exit(0);
-}
-
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
